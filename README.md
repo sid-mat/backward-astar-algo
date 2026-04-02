@@ -3,11 +3,11 @@
 ## Team Members
 | Name | Directory ID | UID |
 |------|-------------|-----|
-| [Name 1] | [dir_id_1] | [uid_1] |
-| [Name 2] | [dir_id_2] | [uid_2] |
+| Jigar Shah | [dir_id_1] | [uid_1] |
+| Syed Ahmed | [dir_id_2] | [uid_2] |
+| Syed Ahmed | sidmat03 | 122277687 |
 
-**GitHub Repository:** [Your GitHub Link Here]
-*(Must have at least 5 commits with meaningful messages)*
+
 
 ---
 
