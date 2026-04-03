@@ -3,10 +3,9 @@
 ## Team Members
 | Name | Directory ID | UID |
 |------|-------------|-----|
-| Jigar Shah | [dir_id_1] | [uid_1] |
 | Syed Ahmed | [dir_id_2] | [uid_2] |
-| Syed Ahmed | sidmat03 | 122277687 |
-
+| Sidharth Mathur | sidmat03 | 122277687 |
+| Jigar Shah | jshah310 | 121355690 |
 
 
 ---
