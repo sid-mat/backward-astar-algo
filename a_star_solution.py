@@ -319,9 +319,11 @@ def backward_astar(start, goal, step_size, obs_grid):
     path = []
     cur  = visited_idx(*final_node)
     while cur is not None:
-        parent_key, xyz = parent_map[cur]
-        path.append(xyz)
-        cur = parent_key
+      if cur not in parent_map:   # Correction: stops instead of crashing
+          break
+      parent_key, xyz = parent_map[cur]
+      path.append(xyz)
+      cur = parent_key
     # path = [~start, intermediate…, goal]  ✓
 
     return path, explored_edges
