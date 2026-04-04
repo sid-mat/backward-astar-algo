@@ -1,24 +1,24 @@
-"""
+""""
 ENPM661 - Spring 2026
 Project 03 - Phase 1: Backward A* Algorithm for Mobile Robot Path Planning
-
+ 
 Team Members : Syed Ahmed, Sidharth Mathur, Jigar Shah
 GitHub Repo  : https://github.com/sid-mat/backward-astar-algo
-
+ 
 Description
 -----------
 Implements backward A* to find the optimal path for a differential-drive
 mobile robot (radius 5 mm, clearance 5 mm) on a 600 x 250 mm map.
-
+ 
 Action Set  : 5 moves — heading ± 0°, ± 30°, ± 60° then forward by step L.
 Duplicate detection : visited matrix V[1200 x 500 x 12] (per project spec).
 Heuristic   : Euclidean distance to the start node (backward search).
 Goal check  : within 1.5 unit radius of the target point.
-
+ 
 Deliverables generated
 ----------------------
   output_path.mp4  — animation (exploration + optimal path)
-
+ 
 Dependencies
 ------------
   numpy, opencv-python
@@ -30,6 +30,13 @@ import math
 import time
 import numpy as np
 import cv2
+
+# Import the 5 action functions from the separate actions module ───
+from actions import (
+    action_straight, action_left30, action_right30,
+    action_left60, action_right60,
+    ALL_ACTIONS, euclidean, segment_is_free, get_neighbours
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MAP CONSTANTS
@@ -161,82 +168,20 @@ def visited_idx(x: float, y: float, theta: float):
     return ix, iy, it
 
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
-#  ACTION SET  — 5 functions, one per action (project spec §Step 01)
+#  ACTION SET  — [CHANGED] moved to actions.py; imported at the top of this file
 #
 #  Action i: rotate by Δθ_i, then move forward by L.
 #    x' = x + L·cos(θ + Δθ)
 #    y' = y + L·sin(θ + Δθ)
 #    θ' = (θ + Δθ) mod 360
 #  Cost of every action = L
+#
+#  The 5 functions (action_straight, action_left30, action_right30,
+#  action_left60, action_right60), ALL_ACTIONS list, euclidean(),
+#  segment_is_free(), and get_neighbours() are all defined in actions.py.
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def _apply(x, y, theta, delta, L):
-    nt = (theta + delta) % 360
-    rad = math.radians(nt)
-    nx = x + L * math.cos(rad)
-    ny = y + L * math.sin(rad)
-    return round(nx, 2), round(ny, 2), nt
-
-
-def action_straight(x, y, theta, L):
-    return _apply(x, y, theta, 0, L)
-
-
-def action_left30(x, y, theta, L):
-    return _apply(x, y, theta, 30, L)
-
-
-def action_right30(x, y, theta, L):
-    return _apply(x, y, theta, -30, L)
-
-
-def action_left60(x, y, theta, L):
-    return _apply(x, y, theta, 60, L)
-
-
-def action_right60(x, y, theta, L):
-    return _apply(x, y, theta, -60, L)
-
-
-ALL_ACTIONS = [
-    action_straight,
-    action_left30,
-    action_right30,
-    action_left60,
-    action_right60,
-]
-
-
-def euclidean(x1, y1, x2, y2):
-    return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
-
-
-def segment_is_free(x1, y1, x2, y2, obs_grid, sample_step=XY_THRESH):
-    """
-    Check intermediate points along the motion segment so the robot does not
-    'jump through' an obstacle by validating only the endpoint.
-    """
-    dist = euclidean(x1, y1, x2, y2)
-    samples = max(1, int(math.ceil(dist / sample_step)))
-    for i in range(1, samples + 1):
-        t = i / samples
-        xs = x1 + t * (x2 - x1)
-        ys = y1 + t * (y2 - y1)
-        if obs_fast(xs, ys, obs_grid):
-            return False
-    return True
-
-
-def get_neighbours(x, y, theta, L, obs_grid):
-    """Apply all 5 actions; return valid (nx, ny, ntheta, cost) tuples."""
-    result = []
-    for act in ALL_ACTIONS:
-        nx, ny, nt = act(x, y, theta, L)
-        if not obs_fast(nx, ny, obs_grid) and segment_is_free(x, y, nx, ny, obs_grid):
-            result.append((nx, ny, nt, float(L)))
-    return result
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GOAL-PROXIMITY CHECK
@@ -293,7 +238,7 @@ def backward_astar(start, goal, step_size, obs_grid):
             final_node = (cx, cy, ctheta)
             break
 
-        for nx, ny, ntheta, move_cost in get_neighbours(cx, cy, ctheta, step_size, obs_grid):
+        for nx, ny, ntheta, move_cost in get_neighbours(cx, cy, ctheta, step_size, obs_grid, obs_fast):
             nk = visited_idx(nx, ny, ntheta)
             nix, niy, nit = nk
 
@@ -304,11 +249,21 @@ def backward_astar(start, goal, step_size, obs_grid):
             if new_g < cost_g.get(nk, float("inf")):
                 cost_g[nk] = new_g
                 parent_map[nk] = (ck, (nx, ny, ntheta))
+                explored_edges.append(((cx, cy), (nx, ny)))
+ 
+                # ── Goal check at generation time (per project spec) ──────────
+                if within_threshold(nx, ny, sx, sy):
+                    final_node = (nx, ny, ntheta)
+                    break
+                
                 h = euclidean(nx, ny, sx, sy)
                 heapq.heappush(heap, (new_g + h, counter, nx, ny, ntheta))
                 counter += 1
                 explored_edges.append(((cx, cy), (nx, ny)))
 
+        if final_node is not None:
+           break
+ 
     if final_node is None:
         return None, explored_edges
 
