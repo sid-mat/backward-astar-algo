@@ -3,7 +3,7 @@
 ## Team Members
 | Name | Directory ID | UID |
 |------|-------------|-----|
-| Syed Ahmed | [dir_id_2] | [uid_2] |
+| Syed Yashal Ahmed | sahmed43 | 122288393 |
 | Sidharth Mathur | sidmat03 | 122277687 |
 | Jigar Shah | jshah310 | 121355690 |
 
