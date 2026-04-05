@@ -216,14 +216,17 @@ def segment_is_free(x1: float, y1: float, x2: float, y2: float,
     This prevents the robot from 'tunnelling' through a thin obstacle when
     only the endpoint is checked.
     """
-    dist = euclidean(x1, y1, x2, y2)
+    dist    = euclidean(x1, y1, x2, y2)
     samples = max(1, int(math.ceil(dist / sample_step)))
     for i in range(1, samples + 1):
-        t = i / samples
-        xs = x1 + t * (x2 - x1)
-        ys = y1 + t * (y2 - y1)
-        if obs_grid[int(round(ys / sample_step)),
-                    int(round(xs / sample_step))]:
+        t   = i / samples
+        xs  = x1 + t * (x2 - x1)
+        ys  = y1 + t * (y2 - y1)
+        rix = int(round(xs / sample_step))
+        riy = int(round(ys / sample_step))
+        if rix < 0 or rix >= obs_grid.shape[1] or riy < 0 or riy >= obs_grid.shape[0]:
+            return False
+        if obs_grid[riy, rix]:
             return False
     return True
 
