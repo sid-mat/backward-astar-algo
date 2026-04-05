@@ -75,43 +75,82 @@ COL_PATH    = (  0,   0, 197)   # red optimal path arrows
 #   theta' = (theta + delta) mod 360
 # ---------------------------------------------------------------------------
 
-def is_obstacle(x: float, y: float, c: float) -> bool:
-    """Return True if (x, y) is inside an obstacle or its clearance zone."""
-    if x < c or x > MAP_W - c or y < c or y > MAP_H - c:
-        return True
-    if (150 - c) <= x <= (175 + c) and y <= (125 + c):
-        return True
-    if (250 - c) <= x <= (275 + c) and y >= (125 - c):
-        return True
-    if (x - 400) ** 2 + (y - 110) ** 2 <= (50 + c) ** 2:
-        return True
-    return False
+def _move(x, y, theta, delta, L):
+    nt  = (theta + delta) % 360
+    rad = math.radians(nt)
+    return round(x + L * math.cos(rad), 2), round(y + L * math.sin(rad), 2), nt
+
+def action_straight(x, y, theta, L): return _move(x, y, theta,   0, L)
+def action_left30  (x, y, theta, L): return _move(x, y, theta,  30, L)
+def action_right30 (x, y, theta, L): return _move(x, y, theta, -30, L)
+def action_left60  (x, y, theta, L): return _move(x, y, theta,  60, L)
+def action_right60 (x, y, theta, L): return _move(x, y, theta, -60, L)
+
+ALL_ACTIONS = [action_straight, action_left30, action_right30,
+               action_left60,   action_right60]
 
 
-def build_obstacle_grid(clearance: float) -> np.ndarray:
-    """
-    Pre-compute a boolean obstacle look-up table at XY_THRESH resolution.
-    Shape: (VIY_MAX, VIX_MAX) = (500, 1200).
-    grid[iy, ix] == 1  ↔  the 0.5-unit cell (ix*0.5, iy*0.5) is blocked.
-    """
-    xs = np.arange(VIX_MAX) * XY_THRESH   # x coords: 0, 0.5, …, 599.5
-    ys = np.arange(VIY_MAX) * XY_THRESH   # y coords: 0, 0.5, …, 249.5
-    X, Y = np.meshgrid(xs, ys)            # shape (500, 1200)
-    c = clearance
-    border = (X < c) | (X > MAP_W - c) | (Y < c) | (Y > MAP_H - c)
-    r1 = ((150 - c) <= X) & (X <= (175 + c)) & (Y <= (125 + c))
-    r2 = ((250 - c) <= X) & (X <= (275 + c)) & (Y >= (125 - c))
-    circle = (X - 400) ** 2 + (Y - 110) ** 2 <= (50 + c) ** 2
-    return (border | r1 | r2 | circle).astype(np.uint8)
+# ---------------------------------------------------------------------------
+# Obstacle space  (project spec Step 02)
+#
+# "SM7687" is drawn as rectangular strokes across the 600 x 250 mm map.
+# Each stroke is the intersection of 4 half-planes:
+#   x >= x_lo  AND  x <= x_hi  AND  y >= y_lo  AND  y <= y_hi
+#
+# The full obstacle set is the union of all strokes (semi-algebraic model).
+# Clearance c inflates every bound outward before checking:
+#   x >= x_lo - c  AND  x <= x_hi + c  AND  y >= y_lo - c  AND  y <= y_hi + c
+#
+# Layout rationale:
+#   6 character slots of 50 mm, separated by 40 mm gaps.
+#   With default c = 10 mm, each gap leaves a 20 mm navigable corridor.
+#   Characters span y in [85, 165]; free strips at y < 75 and y > 175.
+#
+#   Slot x ranges:
+#     S : 30 - 80
+#     M : 120 - 170
+#     7 : 210 - 260
+#     6 : 300 - 350
+#     8 : 390 - 440
+#     7 : 480 - 530
+# ---------------------------------------------------------------------------
 
+_STROKES = [
+    # -- S  (x 30-80, y 85-165) --
+    ( 30,  80, 155, 165),   # top bar
+    ( 30,  40, 125, 165),   # upper-left vertical
+    ( 30,  80, 120, 130),   # middle bar
+    ( 70,  80,  85, 125),   # lower-right vertical
+    ( 30,  80,  85,  95),   # bottom bar
 
-def obs_fast(x: float, y: float, grid: np.ndarray) -> bool:
-    """O(1) obstacle check using pre-computed grid."""
-    iy = int(round(y / XY_THRESH))
-    ix = int(round(x / XY_THRESH))
-    if ix < 0 or ix >= VIX_MAX or iy < 0 or iy >= VIY_MAX:
-        return True
-    return bool(grid[iy, ix])
+    # -- M  (x 120-170, y 85-165) --
+    (120, 130,  85, 165),   # left vertical
+    (160, 170,  85, 165),   # right vertical
+    (143, 157, 130, 165),   # center peak (approximates the V notch)
+
+    # -- 7  (x 210-260, y 85-165) --
+    (210, 260, 155, 165),   # top bar
+    (250, 260,  85, 165),   # right vertical
+
+    # -- 6  (x 300-350, y 85-165) --
+    (300, 350, 155, 165),   # top bar
+    (300, 310,  85, 165),   # left vertical
+    (300, 350, 120, 130),   # middle bar
+    (340, 350,  85, 130),   # lower-right vertical
+    (300, 350,  85,  95),   # bottom bar
+
+    # -- 8  (x 390-440, y 85-165) --
+    (390, 440, 155, 165),   # top bar
+    (390, 400,  85, 165),   # left vertical
+    (430, 440,  85, 165),   # right vertical
+    (390, 440, 120, 130),   # middle bar
+    (390, 440,  85,  95),   # bottom bar
+
+    # -- 7  (x 480-530, y 85-165) --
+    (480, 530, 155, 165),   # top bar
+    (520, 530,  85, 165),   # right vertical
+]
+
 
 def _stroke_hit(x, y, xl, xh, yl, yh, c):
     return (xl - c) <= x <= (xh + c) and (yl - c) <= y <= (yh + c)
