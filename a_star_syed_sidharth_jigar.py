@@ -274,60 +274,54 @@ def visited_idx(x, y, theta):
 # Goal proximity check
 # ---------------------------------------------------------------------------
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  ACTION SET  — [CHANGED] moved to actions.py; imported at the top of this file
+def within_threshold(x, y, tx, ty):
+    return euclidean(x, y, tx, ty) <= GOAL_THRESH
+
+
+# ---------------------------------------------------------------------------
+# Backward A* search  (project spec Step 03)
 #
-#  Action i: rotate by Δθ_i, then move forward by L.
-#    x' = x + L·cos(θ + Δθ)
-#    y' = y + L·sin(θ + Δθ)
-#    θ' = (θ + Δθ) mod 360
-#  Cost of every action = L
+# Seeds the open list with the GOAL node (cost-to-come = 0).
+# Heuristic h(n) = Euclidean distance from n to the START node.
+# Terminates when a node within GOAL_THRESH of START is popped.
 #
-#  The 5 functions (action_straight, action_left30, action_right30,
-#  action_left60, action_right60), ALL_ACTIONS list, euclidean(),
-#  segment_is_free(), and get_neighbours() are all defined in actions.py.
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  GOAL-PROXIMITY CHECK
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def within_threshold(x, y, tx, ty, threshold=GOAL_THRESH):
-    return euclidean(x, y, tx, ty) <= threshold
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  BACKWARD A* SEARCH
+# Because the search runs goal->start, following parent pointers
+# back from final_node produces the path in start->goal order.
 #
-#  The search is seeded with the GOAL node.
-#  The heuristic at each node x is dist(x, START).
-#  We stop when we pop a node within GOAL_THRESH of the START.
-#  Backtracking parent pointers reconstructs the forward path start → goal.
-# ═══════════════════════════════════════════════════════════════════════════════
+# Parameters
+# ----------
+# start     : (x, y, theta) start pose
+# goal      : (x, y, theta) goal pose
+# step_size : action step length L (1-10)
+# grid      : pre-computed occupancy grid
+#
+# Returns
+# -------
+# path           : list of (x, y, theta) waypoints in start->goal order,
+#                  or None if no path exists
+# explored_edges : list of ((x1,y1),(x2,y2)) pairs for visualization
+# ---------------------------------------------------------------------------
 
-def backward_astar(start, goal, step_size, obs_grid):
+def backward_astar(start, goal, step_size, grid):
     sx, sy, stheta = start
     gx, gy, gtheta = goal
 
-    visited = np.zeros((VIX_MAX, VIY_MAX, VT_MAX), dtype=np.uint8)
-    parent_map = {}
-    cost_g = {}
+    visited = np.zeros((VIX_MAX, VIY_MAX, N_THETA), dtype=np.uint8)
+    parent  = {}
+    cost_g  = {}
     counter = 0
 
-    gk = visited_idx(gx, gy, gtheta)
-    cost_g[gk] = 0.0
-    parent_map[gk] = (None, (gx, gy, gtheta))
-    h0 = euclidean(gx, gy, sx, sy)
-    heap = [(h0, counter, gx, gy, gtheta)]
-    counter += 1
+    gk          = visited_idx(gx, gy, gtheta)
+    cost_g[gk]  = 0.0
+    parent[gk]  = (None, (gx, gy, gtheta))
+    heap        = [(euclidean(gx, gy, sx, sy), counter, gx, gy, gtheta)]
+    counter    += 1
 
-    # Trivial case: goal is already close to start
     if within_threshold(gx, gy, sx, sy):
-        print("  Start and goal are within threshold — trivial path.")
         return [(sx, sy, stheta), (gx, gy, gtheta)], []
 
     explored_edges = []
-    final_node = None
+    final_node     = None
 
     while heap:
         _, _, cx, cy, ctheta = heapq.heappop(heap)
@@ -336,14 +330,13 @@ def backward_astar(start, goal, step_size, obs_grid):
 
         if visited[cix, ciy, cit]:
             continue
-
         visited[cix, ciy, cit] = 1
 
         if within_threshold(cx, cy, sx, sy):
             final_node = (cx, cy, ctheta)
             break
 
-        for nx, ny, ntheta, move_cost in get_neighbours(cx, cy, ctheta, step_size, obs_grid, obs_fast):
+        for nx, ny, ntheta, move_cost in get_neighbours(cx, cy, ctheta, step_size, grid):
             nk = visited_idx(nx, ny, ntheta)
             nix, niy, nit = nk
 
@@ -353,51 +346,57 @@ def backward_astar(start, goal, step_size, obs_grid):
             new_g = cost_g[ck] + move_cost
             if new_g < cost_g.get(nk, float("inf")):
                 cost_g[nk] = new_g
-                parent_map[nk] = (ck, (nx, ny, ntheta))
+                parent[nk] = (ck, (nx, ny, ntheta))
                 explored_edges.append(((cx, cy), (nx, ny)))
- 
-                # ── Goal check at generation time (per project spec) ──────────
+
                 if within_threshold(nx, ny, sx, sy):
                     final_node = (nx, ny, ntheta)
                     break
-                
+
                 h = euclidean(nx, ny, sx, sy)
                 heapq.heappush(heap, (new_g + h, counter, nx, ny, ntheta))
                 counter += 1
-                explored_edges.append(((cx, cy), (nx, ny)))
 
         if final_node is not None:
-           break
- 
+            break
+
     if final_node is None:
         return None, explored_edges
 
-    # Backtrack from the popped near-start node to the seeded goal node.
+    # Trace parent links from final_node back to the goal seed.
+    # Search ran goal->start so this gives start->goal order.
     path = []
-    cur = visited_idx(*final_node)
+    cur  = visited_idx(*final_node)
     while cur is not None:
-        parent_key, xyz = parent_map[cur]
+        pk, xyz = parent[cur]
         path.append(xyz)
-        cur = parent_key
+        cur = pk
 
-    # Ensure the displayed path starts exactly at the user-entered start pose.
-    first_x, first_y, first_theta = path[0]
-    if (
-        abs(first_x - sx) > 1e-6
-        or abs(first_y - sy) > 1e-6
-        or abs(first_theta - stheta) > 1e-6
-    ):
+    fx, fy, _ = path[0]
+    if abs(fx - sx) > 1e-6 or abs(fy - sy) > 1e-6:
         path.insert(0, (sx, sy, stheta))
 
     return path, explored_edges
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  VISUALISATION  — node exploration + optimal path, saved to .mp4
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Visualization  (project spec Step 05)
+#
+# Each expanded edge and each path step is drawn as a directed arrow
+# (vector), which satisfies the spec requirement to display the search
+# tree as vectors. cv2.arrowedLine is equivalent to the matplotlib
+# quiver approach shown in the spec sample code.
+#
+# Phase 1 draws exploration arrows (cyan) after search completes.
+# Phase 2 overlays optimal path arrows (red) on the same canvas.
+# ---------------------------------------------------------------------------
+
+def cart_to_img(x, y):
+    """Cartesian (x, y) -> OpenCV pixel (col, row)."""
+    return int(round(x)), MAP_H - 1 - int(round(y))
+
 
 def draw_arrow(canvas, x1, y1, x2, y2, color, thickness=1):
-    """Draw an arrow from Cartesian (x1,y1)→(x2,y2) on the canvas."""
     p1 = cart_to_img(x1, y1)
     p2 = cart_to_img(x2, y2)
     if p1 != p2:
@@ -405,79 +404,80 @@ def draw_arrow(canvas, x1, y1, x2, y2, color, thickness=1):
 
 
 def visualise(canvas_base, start, goal, explored_edges, path,
-              video_path="output_path.mp4", show_window=False):
+              out_path="output_path.mp4"):
     """
-    Render the full animation and save to video.
-    Phase 1 — draw all explored edges.
-    Phase 2 — draw the optimal path over the exploration.
-    """
-    h, w = canvas_base.shape[:2]
-    out_h = h * VIZ_SCALE
-    out_w = w * VIZ_SCALE
+    Write exploration and path animation to an mp4 file.
 
+    Style matches the provided example:
+      - 30 fps, 3x scale, black obstacles on white background
+      - Dark green arrows for exploration, batched to ~15s total duration
+      - Red arrows for path, one waypoint per frame
+      - Blue filled circles for start and goal markers
+
+    Parameters
+    ----------
+    canvas_base    : BGR map image (H x W x 3)
+    start, goal    : (x, y, theta) tuples
+    explored_edges : list of ((x1,y1),(x2,y2)) from backward_astar
+    path           : list of (x, y, theta) waypoints in start->goal order
+    out_path       : output filename
+    """
+    h, w   = canvas_base.shape[:2]
+    out_h  = h * VIZ_SCALE
+    out_w  = w * VIZ_SCALE
+    fps    = 30
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    fps = 60
-    writer = cv2.VideoWriter(video_path, fourcc, fps, (out_w, out_h))
+    writer = cv2.VideoWriter(out_path, fourcc, fps, (out_w, out_h))
     if not writer.isOpened():
-        raise RuntimeError(f"Could not open video writer for {video_path}")
+        raise RuntimeError(f"Could not open video writer: {out_path}")
 
     canvas = canvas_base.copy()
-
-    # Mark start and goal
     sx, sy, _ = start
     gx, gy, _ = goal
-    cv2.circle(canvas, cart_to_img(sx, sy), 6, C_START, -1)
-    cv2.circle(canvas, cart_to_img(gx, gy), 6, C_GOAL, -1)
-    cv2.circle(canvas, cart_to_img(gx, gy), int(GOAL_THRESH + 0.5), C_GOAL, 1)
 
-    n_edges = len(explored_edges)
-    print(f"\n  Animating {n_edges:,} exploration edges …")
+    # small filled circles for start and goal (radius 6 on base canvas -> 18px at 3x)
+    cv2.circle(canvas, cart_to_img(sx, sy), 6, COL_START, -1)
+    cv2.circle(canvas, cart_to_img(gx, gy), 6, COL_GOAL,  -1)
 
-    # Phase 1: exploration
-    batch = max(1, n_edges // (fps * 20)) if n_edges else 1
-    for i, ((x1, y1), (x2, y2)) in enumerate(explored_edges):
-        draw_arrow(canvas, x1, y1, x2, y2, C_EXPLORE, thickness=1)
-        if i % batch == 0:
-            frame = cv2.resize(canvas, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
-            writer.write(frame)
-
-    frame = cv2.resize(canvas, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
-    for _ in range(fps):
-        writer.write(frame)
-
-    # Phase 2: optimal path
-    print(f"  Animating {len(path)} path waypoints …")
-    for i in range(1, len(path)):
-        x1, y1, _ = path[i - 1]
-        x2, y2, _ = path[i]
-        draw_arrow(canvas, x1, y1, x2, y2, C_PATH, thickness=3)
+    def write_frame():
         frame = cv2.resize(canvas, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
         writer.write(frame)
 
-    frame = cv2.resize(canvas, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
+    # phase 1: exploration
+    # batch to ~450 output frames (15s at 30fps) regardless of edge count
+    n     = len(explored_edges)
+    batch = max(1, n // 450) if n else 1
+    print(f"  Animating {n:,} exploration edges (batch={batch}, ~15s) ...")
+    for i, ((x1, y1), (x2, y2)) in enumerate(explored_edges):
+        draw_arrow(canvas, x1, y1, x2, y2, COL_EXPLORE, thickness=1)
+        if i % batch == 0:
+            write_frame()
+
+    # 1s pause after exploration completes
+    for _ in range(fps):
+        write_frame()
+
+    # phase 2: path - one waypoint per frame, matches example exactly
+    print(f"  Animating {len(path)} path waypoints (1 per frame) ...")
+    for i in range(1, len(path)):
+        x1, y1, _ = path[i - 1]
+        x2, y2, _ = path[i]
+        draw_arrow(canvas, x1, y1, x2, y2, COL_PATH, thickness=1)
+        write_frame()
+
+    # 2s hold on final frame
     for _ in range(fps * 2):
-        writer.write(frame)
+        write_frame()
 
     writer.release()
-    print(f"  Video saved → {video_path}")
-
-    if show_window:
-        try:
-            cv2.imshow("Backward A* — Result  (press any key to close)", frame)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-        except cv2.error:
-            print("  OpenCV GUI display not available in this environment; video was still saved.")
+    print(f"  Saved -> {out_path}")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  USER INPUT HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# User input helpers
+# ---------------------------------------------------------------------------
 
 def ask_float(prompt, default=None):
-    """
-    Ask for a float. If default is provided, pressing Enter returns that value.
-    """
     while True:
         raw = input(prompt).strip()
         if raw == "" and default is not None:
@@ -485,7 +485,7 @@ def ask_float(prompt, default=None):
         try:
             return float(raw)
         except ValueError:
-            print("  ✗  Please enter a number.")
+            print("  Please enter a number.")
 
 
 def ask_int_range(prompt, lo, hi):
@@ -494,112 +494,105 @@ def ask_int_range(prompt, lo, hi):
             v = int(input(prompt))
             if lo <= v <= hi:
                 return v
-            print(f"  ✗  Must be an integer between {lo} and {hi}.")
+            print(f"  Must be an integer between {lo} and {hi}.")
         except ValueError:
-            print("  ✗  Please enter an integer.")
+            print("  Please enter an integer.")
 
 
 def ask_theta(prompt):
-    """Accept any integer multiple of 30; normalise to [0, 360)."""
+    """Accept any integer multiple of 30 and normalize to [0, 360)."""
     while True:
         try:
             v = int(input(prompt))
             if v % 30 == 0:
                 return float(v % 360)
-            print("  ✗  θ must be a multiple of 30 (e.g. -60, -30, 0, 30, 60, …).")
+            print("  Theta must be a multiple of 30 (e.g. -60, 0, 30, 90 ...).")
         except ValueError:
-            print("  ✗  Please enter an integer.")
+            print("  Please enter an integer.")
 
 
-def ask_point(label, clearance):
-    """Keep prompting until a free-space (x, y, θ) is entered."""
+def print_free_space_hint(c):
+    """Print coordinates that are guaranteed to be in free space."""
+    print("\n  Free space guide (with current clearance):")
+    print(f"    Bottom strip : y in [10, {int(85 - c)}]  at any x in [10, 590]")
+    print(f"    Top strip    : y in [{int(165 + c)}, 240] at any x in [10, 590]")
+    print( "    Mid-map gaps : x ~ 100, 190, 280, 370, 460  (between characters)")
+    print( "  Example inputs: (50, 50), (550, 50), (50, 200), (550, 200)")
+
+
+def ask_point(label, c):
+    """
+    Prompt for (x, y, theta) and re-ask until the point is in free space.
+
+    Parameters
+    ----------
+    label : display label shown to the user
+    c     : total clearance for obstacle check
+    """
     while True:
-        print(f"\n  ── {label} ──────────────────────────────────────────")
-        x = ask_float(f"    x   (0 – {MAP_W}): ")
-        y = ask_float(f"    y   (0 – {MAP_H}): ")
-        theta = ask_theta("    θ   (multiple of 30°): ")
-
+        print(f"\n  -- {label} --")
+        x     = ask_float(f"    x     (0 - {MAP_W}): ")
+        y     = ask_float(f"    y     (0 - {MAP_H}): ")
+        theta = ask_theta( "    theta (multiple of 30 deg): ")
         if not (0 <= x <= MAP_W and 0 <= y <= MAP_H):
-            print("  ✗  Outside map bounds. Try again.")
+            print("  Outside map bounds. Try again.")
             continue
-        if is_obstacle(x, y, clearance):
-            print(f"  ✗  ({x}, {y}) is inside an obstacle or clearance zone. Try again.")
+        if is_obstacle(x, y, c):
+            print(f"  ({x}, {y}) is inside an obstacle or clearance zone.")
+            print_free_space_hint(c)
             continue
-        print(f"  ✓  {label} accepted: ({x}, {y}, {theta}°)")
+        print(f"  {label} accepted: ({x}, {y}, {theta} deg)")
         return float(x), float(y), theta
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  MAIN
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
-    print()
-    print("===============================================================")
-    print("  ENPM661 Project 3 Phase 1 - Backward A* Path Planner       ")
-    print("===============================================================")
+    print("\nENPM661 Project 3 Phase 1 - Backward A* Path Planner")
+    print("Team: Syed Ahmed, Sidharth Mathur, Jigar Shah\n")
 
-    # [1] Robot parameters
-    print("\n[1/5]  Robot Parameters")
-    robot_r = ask_float("  Robot radius   (mm) [default 5]: ", default=5.0)
-    user_c = ask_float("  User clearance (mm) [default 5]: ", default=5.0)
+    robot_r = ask_float("Robot radius   (mm) [default 5]: ", default=5.0)
+    user_c  = ask_float("User clearance (mm) [default 5]: ", default=5.0)
     total_c = robot_r + user_c
-    print(f"  Total clearance = {robot_r} + {user_c} = {total_c} mm")
+    print(f"Total clearance: {total_c} mm")
 
-    step_L = ask_int_range("\n  Step size L  (1 - 10 units): ", 1, 10)
+    step_L  = ask_int_range("Step size L (1 - 10): ", 1, 10)
 
-    # [2] Start & goal
-    print("\n[2/5]  Start & Goal  (Cartesian, origin = bottom-left corner)")
-    start = ask_point("Start Point", total_c)
-    goal = ask_point("Goal Point", total_c)
+    print("\nCoordinates: Cartesian, origin at bottom-left corner.")
+    print_free_space_hint(total_c)
 
-    # [3] Build map
-    print("\n[3/5]  Building obstacle map …")
-    build_start = time.time()
-    obs_grid = build_obstacle_grid(total_c)
+    start = ask_point("Start", total_c)
+    goal  = ask_point("Goal",  total_c)
+
+    print("\nBuilding obstacle map ...")
+    t0     = time.time()
+    grid   = build_obstacle_grid(total_c)
     canvas = build_map_image(total_c)
-    print(f"       Done in {time.time() - build_start:.3f}s  (canvas shape: {canvas.shape})")
+    print(f"Map built in {time.time() - t0:.3f}s")
 
-    # [4] Backward A*
-    print("\n[4/5]  Running Backward A* search …")
-    search_start = time.time()
-    path, explored = backward_astar(start, goal, step_L, obs_grid)
-    search_dt = time.time() - search_start
-    print(f"       Search time    : {search_dt:.3f}s")
-    print(f"       Edges explored : {len(explored):,}")
+    print("\nRunning backward A* ...")
+    t1 = time.time()
+    path, explored = backward_astar(start, goal, step_L, grid)
+    dt = time.time() - t1
+    print(f"Search done in {dt:.3f}s  |  edges explored: {len(explored):,}")
 
     if path is None:
-        print("\n  ✗  No path found between the given start and goal.")
-        print("     Suggestions: try positions farther from obstacles,")
-        print("     a larger step size, or a smaller clearance value.")
+        print("\nNo path found. Try different start/goal or reduce clearance.")
         return
 
     cost = sum(
-        euclidean(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+        euclidean(path[i][0], path[i][1], path[i+1][0], path[i+1][1])
         for i in range(len(path) - 1)
     )
-    print(f"       Path waypoints : {len(path)}")
-    print(f"       Path cost      : {cost:.3f} units")
+    print(f"Path: {len(path)} waypoints, cost: {cost:.2f} units")
 
-    # [5] Visualise
-    print("\n[5/5]  Generating animation …")
-    visualise(
-        canvas,
-        start,
-        goal,
-        explored,
-        path,
-        video_path="output_path.mp4",
-        show_window=False,
-    )
+    print("\nGenerating animation ...")
+    visualise(canvas, start, goal, explored, path)
 
-    total_runtime = time.time() - build_start
-    print()
-    print("╔══════════════════════════════════════════════════════════════╗")
-    print(f"║  Done!  Total runtime: {total_runtime:.2f}s".ljust(62) + "  ║")
-    print("║  Output: output_path.mp4                                    ║")
-    print("╚══════════════════════════════════════════════════════════════╝")
-    print()
+    print(f"\nTotal runtime: {time.time() - t0:.2f}s")
+    print("Output: output_path.mp4\n")
 
 
 if __name__ == "__main__":
